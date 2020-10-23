@@ -4,6 +4,7 @@
     {
         _BaseColor ("Color", Color) = (0, 0, 0, 1)
         _Roughness ("Roughness", Range(0.03, 1)) = 1
+        _Samples ("Samples", Int) = 10000
         _Cube ("Cubemap", CUBE) = "" {}
     }
     SubShader
@@ -37,6 +38,7 @@
 
             float4 _BaseColor;
             float _Roughness;
+            int _Samples;
             
             samplerCUBE _Cube;
             half4 _Cube_HDR;
@@ -68,7 +70,7 @@
             
             float3 SampleColor(float3 direction)
             {   
-                half4 tex = texCUBE(_Cube, direction);
+                half4 tex = texCUBElod(_Cube, float4(direction, 0));
                 return DecodeHDR(tex, _Cube_HDR).rgb;
             }
             
@@ -89,19 +91,73 @@
                 return a2 / (UNITY_PI * Sqr(NDotH2 * (a2 - 1) + 1));
             }
 
+            // Rotation matrix which maps (0, 1, 0) to v
+            // Formula was taken from https://en.wikipedia.org/wiki/Rotation_matrix#Vector_to_vector_formulation
+            float3x3 GetRotationMat(float3 v)
+            {
+                if (v.y == -1)
+                {
+                    return float3x3
+                    (
+                        -1, 0, 0,
+                        0, -1, 0,
+                        0, 0, -1
+                    );
+                }
+                float3x3 m1 = float3x3
+                (
+                    1, v.x, 0,
+                    -v.x, 1, -v.z,
+                    0, v.z, 1
+                );
+                float3x3 m2 = float3x3
+                (
+                    -v.x * v.x, 0, -v.x * v.z,
+                    0, -v.x * v.x - v.z * v.z, 0,
+                    -v.x * v.z, 0, -v.z * v.z
+                );
+                return m1 + 1 / (1 + v.y) * m2;
+            }
+            
             fixed4 frag (v2f i) : SV_Target
             {
+                const float PI = 3.14159265;
                 float3 normal = normalize(i.normal);
                 
                 float3 viewDirection = normalize(_WorldSpaceCameraPos - i.pos.xyz);
+
+                float3 lOut = float3(0, 0, 0);
+                float normCft = 0;
                 
-                // Replace this specular calculation by Montecarlo.
-                // Normalize the BRDF in such a way, that integral over a hemysphere of (BRDF * dot(normal, w')) == 1
-                // TIP: use Random(i) to get a pseudo-random value.
-                float3 viewRefl = reflect(-viewDirection.xyz, normal);
-                float3 specular = SampleColor(viewRefl);
+                float3x3 rotation = GetRotationMat(normal); 
+                uint randSeed = 42;
                 
-                return fixed4(specular, 1);
+                for (int i = 0; i < _Samples; ++i)
+                {
+                    float cosPhi = Random(randSeed);
+                    float sinPhi = sqrt(1 - Sqr(cosPhi));
+                    randSeed = Hash(randSeed);
+                    float alpha = Random(randSeed) * 2 * PI;
+                    randSeed = Hash(randSeed);
+                    
+                    float3 lightDirection = float3
+                    (
+                        sinPhi * cos(alpha),
+                        cosPhi,
+                        sinPhi * sin(alpha)
+                    );
+                    
+                    lightDirection = mul(rotation, lightDirection);
+                    
+                    float3 lIn = SampleColor(lightDirection);
+                    float brdf = GetSpecularBRDF(viewDirection, lightDirection, normal);
+                    float cosTheta = dot(normal, lightDirection);
+                    
+                    lOut += lIn * brdf * cosTheta;
+                    normCft += brdf * cosTheta;
+                }
+                lOut /= normCft;
+                return fixed4(lOut, 1);
             }
             ENDCG
         }
