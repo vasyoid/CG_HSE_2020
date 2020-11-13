@@ -9,6 +9,10 @@
 #define INV_FOUR_PI   0.07957747155f
 #define HALF_PI       1.57079632679f
 #define INV_HALF_PI   0.636619772367f
+#define SQRT_PI       1.772453851f
+#define SQRT_3        1.732050808f
+#define SQRT_5        2.236067977f
+#define SQRT_15       3.872983346f
 
 RWStructuredBuffer<float4> SH_0_1_r;
 RWStructuredBuffer<float4> SH_0_1_g;
@@ -45,37 +49,119 @@ float3 SampleColor(float3 direction)
     return tex.rgb;
 }
 
+float H00(float3 w)
+{
+    return 1 / (2 * SQRT_PI);
+}
+
+float H1m1(float3 w)
+{
+    return -SQRT_3 * w.y / (2 * SQRT_PI);
+}
+
+float H10(float3 w)
+{
+    return SQRT_3 * w.z / (2 * SQRT_PI);
+}
+
+float H11(float3 w)
+{
+    return -SQRT_3 * w.x / (2 * SQRT_PI);
+}
+
+float H2m2(float3 w)
+{
+    return SQRT_15 * w.y * w.x / (2 * SQRT_PI);
+}
+
+float H2m1(float3 w)
+{
+    return -SQRT_15 * w.y * w.z / (2 * SQRT_PI);
+}
+
+float H20(float3 w)
+{
+    return SQRT_5 * (3 * w.z * w.z - 1) / (4 * SQRT_PI);
+}
+
+float H21(float3 w)
+{
+    return -SQRT_15 * w.x * w.z / (2 * SQRT_PI);
+}
+
+float H22(float3 w)
+{
+    return SQRT_15 * (w.x * w.x - w.y * w.y) / (4 * SQRT_PI);
+}
+
 [numthreads(1024, 1, 1)]
 void ComputeHarmonics(uint id : SV_DispatchThreadID)
 {
     const int THREADS = 1024;
-    const int SAMPLES = 100;
+    const int SAMPLES = 50;
     
-    // See SH.shader for more details
-    float4 results[7] = {
-        float4(0, 0, 0, 0), // SH_0_1_r
-        float4(0, 0, 0, 0), // SH_0_1_g
-        float4(0, 0, 0, 0), // SH_0_1_b
-        
-        float4(0, 0, 0, 0), // SH_2_r
-        float4(0, 0, 0, 0), // SH_2_g
-        float4(0, 0, 0, 0), // SH_2_b
-        
-        float4(0, 0, 0, 0), // SH_2_rgb
+    float3 lOut[9] = {
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0),
+        float3(0, 0, 0)
     };
     
-    // Populate results buffer using monte-carlo method.
-    // You can see the Random(i) function. Use it just as with the previous task.
+    for (int i = 0; i < SAMPLES; ++i)
+    {
+        float cosPhi = Random(2 * (id * SAMPLES + i)) * 2 - 1;
+        float sinPhi = sqrt(1 - cosPhi * cosPhi);
+        float alpha = Random(2 * (id * SAMPLES + i) + 1) * TWO_PI;
+
+        float3 lightDirection = float3
+        (
+            sinPhi * cos(alpha),
+            sinPhi * sin(alpha),
+            cosPhi
+        );
+        
+        float3 lIn = SampleColor(lightDirection);
+        
+        lOut[0] += lIn * H00(lightDirection);
+        lOut[1] += lIn * H1m1(lightDirection);
+        lOut[2] += lIn * H10(lightDirection);
+        lOut[3] += lIn * H11(lightDirection);
+        lOut[4] += lIn * H2m2(lightDirection);
+        lOut[5] += lIn * H2m1(lightDirection);
+        lOut[6] += lIn * H20(lightDirection);
+        lOut[7] += lIn * H21(lightDirection);
+        lOut[8] += lIn * H22(lightDirection);
+    }
+
+    float3 one = float3(1, 1, 1);
     
-    // TASK: project light from _Env to spherical harmonic coefficients and store them in results[]
+    lOut[0] *= PI         * H00(one);
+    lOut[1] *= TWO_PI / 3 * H1m1(one);
+    lOut[2] *= TWO_PI / 3 * H10(one);
+    lOut[3] *= TWO_PI / 3 * H11(one);
+    lOut[4] *= PI / 4     * H2m2(one);
+    lOut[5] *= PI / 4     * H2m1(one);
+    lOut[6] *= PI / 4     * SQRT_5 / (4 * SQRT_PI);
+    lOut[7] *= PI / 4     * H21(one);
+    lOut[8] *= PI / 4     * SQRT_15 / (4 * SQRT_PI);
+
+    for (int i = 0; i < 9; ++i)
+    {
+        lOut[i] *= 4.0f / float(SAMPLES);
+    }
     
-    SH_0_1_r[id] = results[0];
-    SH_0_1_g[id] = results[1];
-    SH_0_1_b[id] = results[2];
+    SH_0_1_r[id] = float4(lOut[3].r, lOut[1].r, lOut[2].r, lOut[0].r);
+    SH_0_1_g[id] = float4(lOut[3].g, lOut[1].g, lOut[2].g, lOut[0].g);
+    SH_0_1_b[id] = float4(lOut[3].b, lOut[1].b, lOut[2].b, lOut[0].b);
     
-    SH_2_r[id] = results[3];
-    SH_2_g[id] = results[4];
-    SH_2_b[id] = results[5];    
+    SH_2_r[id] = float4(lOut[4].r, lOut[5].r, lOut[7].r, lOut[6].r);
+    SH_2_g[id] = float4(lOut[4].g, lOut[5].g, lOut[7].g, lOut[6].g);
+    SH_2_b[id] = float4(lOut[4].b, lOut[5].b, lOut[7].b, lOut[6].b);
     
-    SH_2_rgb[id] = results[6];
+    SH_2_rgb[id] = float4(lOut[8], 0);
 }
